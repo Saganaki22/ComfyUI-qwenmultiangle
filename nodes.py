@@ -7,6 +7,12 @@ import numpy as np
 from PIL import Image
 import base64
 import io
+import hashlib
+
+
+# Module-level cache to support multiple node instances independently
+_cache = {}
+_max_cache_size = 50  # Limit cache entries to prevent memory growth
 
 
 class QwenMultiangleCameraNode:
@@ -59,11 +65,46 @@ class QwenMultiangleCameraNode:
     CATEGORY = "image/multiangle"
     OUTPUT_NODE = True
 
+    def _compute_image_hash(self, image):
+        """Compute a hash of the image tensor for cache key comparison."""
+        if image is None:
+            return None
+        try:
+            # Get numpy array and create a hashable representation
+            if hasattr(image, 'cpu'):
+                img_tensor = image[0] if len(image.shape) == 4 else image
+                img_np = img_tensor.cpu().numpy()
+            elif hasattr(image, 'numpy'):
+                img_np = image.numpy()
+                if len(img_np.shape) == 4:
+                    img_np = img_np[0]
+            else:
+                img_np = image
+                if len(img_np.shape) == 4:
+                    img_np = img_np[0]
+            # Use bytes of the array for hashing
+            return hashlib.md5(img_np.tobytes()).hexdigest()
+        except Exception:
+            return str(hash(str(image)))
+
     def generate_prompt(self, horizontal_angle, vertical_angle, zoom, default_prompts=False, image=None, unique_id=None):
         # Validate input ranges
         horizontal_angle = max(0, min(360, int(horizontal_angle)))
         vertical_angle = max(-30, min(90, int(vertical_angle)))
         zoom = max(0.0, min(10.0, float(zoom)))
+
+        # Check cache for unchanged inputs
+        cache_key = str(unique_id) if unique_id else "default"
+        image_hash = self._compute_image_hash(image)
+
+        cached = _cache.get(cache_key, {})
+        if (cached.get('horizontal_angle') == horizontal_angle and
+            cached.get('vertical_angle') == vertical_angle and
+            cached.get('zoom') == zoom and
+            cached.get('default_prompts') == default_prompts and
+            cached.get('image_hash') == image_hash):
+            # Return cached result without recomputing
+            return cached['result']
 
         h_angle = horizontal_angle % 360
 
@@ -187,12 +228,48 @@ class QwenMultiangleCameraNode:
                 # Silently fail on image conversion errors
                 pass
 
-        return {"ui": {"image_base64": [image_base64]}, "result": (prompt,)}
+        result = {"ui": {"image_base64": [image_base64]}, "result": (prompt,)}
+
+        # Cache the result
+        _cache[cache_key] = {
+            'horizontal_angle': horizontal_angle,
+            'vertical_angle': vertical_angle,
+            'zoom': zoom,
+            'default_prompts': default_prompts,
+            'image_hash': image_hash,
+            'result': result
+        }
+
+        # Limit cache size to prevent memory growth
+        if len(_cache) > _max_cache_size:
+            # Remove oldest entries
+            keys_to_remove = list(_cache.keys())[:len(_cache) - _max_cache_size]
+            for key in keys_to_remove:
+                del _cache[key]
+
+        return result
 
     @classmethod
     def IS_CHANGED(cls, horizontal_angle, vertical_angle, zoom, default_prompts=False, image=None, unique_id=None):
-        import time
-        return time.time()
+        # Return a hash of inputs so node only re-runs when inputs actually change
+        try:
+            img_hash = ""
+            if image is not None:
+                if hasattr(image, 'cpu'):
+                    img_tensor = image[0] if len(image.shape) == 4 else image
+                    img_np = img_tensor.cpu().numpy()
+                elif hasattr(image, 'numpy'):
+                    img_np = image.numpy()
+                    if len(img_np.shape) == 4:
+                        img_np = img_np[0]
+                else:
+                    img_np = image
+                    if len(img_np.shape) == 4:
+                        img_np = img_np[0]
+                img_hash = hashlib.md5(img_np.tobytes()).hexdigest()
+            return f"{horizontal_angle}_{vertical_angle}_{zoom}_{default_prompts}_{img_hash}"
+        except Exception:
+            return f"{horizontal_angle}_{vertical_angle}_{zoom}_{default_prompts}"
 
 
 NODE_CLASS_MAPPINGS = {
