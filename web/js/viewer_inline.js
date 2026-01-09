@@ -393,7 +393,11 @@ export const VIEWER_HTML = `
             // Distance Line
             let distanceTube = null;
             function updateDistanceLine(start, end) {
-                if (distanceTube) scene.remove(distanceTube);
+                if (distanceTube) {
+                    scene.remove(distanceTube);
+                    distanceTube.geometry.dispose();
+                    distanceTube.material.dispose();
+                }
                 const path = new THREE.LineCurve3(start, end);
                 const tubeGeo = new THREE.TubeGeometry(path, 1, 0.025, 8, false);
                 const tubeMat = new THREE.MeshBasicMaterial({
@@ -593,8 +597,18 @@ export const VIEWER_HTML = `
 
             // Animation loop
             let time = 0;
+            let isVisible = true;
+
+            // Handle visibility change
+            document.addEventListener('visibilitychange', () => {
+                isVisible = !document.hidden;
+            });
+
             function animate() {
                 requestAnimationFrame(animate);
+
+                if (!isVisible) return;
+
                 time += 0.01;
 
                 const pulse = 1 + Math.sin(time * 2) * 0.03;
