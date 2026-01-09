@@ -56,6 +56,11 @@ class QwenMultiangleCameraNode:
     OUTPUT_NODE = True
 
     def generate_prompt(self, horizontal_angle, vertical_angle, zoom, image=None, unique_id=None):
+        # Validate input ranges
+        horizontal_angle = max(0, min(360, int(horizontal_angle)))
+        vertical_angle = max(-30, min(90, int(vertical_angle)))
+        zoom = max(0.0, min(10.0, float(zoom)))
+
         h_angle = horizontal_angle % 360
         if h_angle < 22.5 or h_angle >= 337.5:
             h_direction = "front view"
@@ -102,12 +107,42 @@ class QwenMultiangleCameraNode:
         # Convert image to base64 for frontend display
         image_base64 = ""
         if image is not None:
-            img_tensor = image[0] if len(image.shape) == 4 else image
-            img_np = (img_tensor.cpu().numpy() * 255).astype(np.uint8)
-            pil_image = Image.fromarray(img_np)
-            buffer = io.BytesIO()
-            pil_image.save(buffer, format="PNG")
-            image_base64 = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("utf-8")
+            try:
+                # Handle different tensor formats
+                if hasattr(image, 'cpu'):
+                    # PyTorch tensor
+                    img_tensor = image[0] if len(image.shape) == 4 else image
+                    img_np = img_tensor.cpu().numpy()
+                elif hasattr(image, 'numpy'):
+                    # Already numpy or tensor with numpy method
+                    img_np = image.numpy()
+                    if len(img_np.shape) == 4:
+                        img_np = img_np[0]
+                else:
+                    # Assume numpy array
+                    img_np = image
+                    if len(img_np.shape) == 4:
+                        img_np = img_np[0]
+
+                # Convert to uint8 and create PIL image
+                img_np = (np.clip(img_np, 0, 1) * 255).astype(np.uint8)
+
+                # Handle different channel orders (HWC, CHW, etc.)
+                if img_np.ndim == 3:
+                    if img_np.shape[0] in (1, 3, 4):  # CHW format
+                        img_np = np.transpose(img_np, (1, 2, 0))
+                    if img_np.shape[-1] == 1:  # Grayscale
+                        img_np = np.concatenate([img_np] * 3, axis=-1)
+                    elif img_np.shape[-1] == 4:  # RGBA, convert to RGB
+                        img_np = img_np[..., :3]
+
+                pil_image = Image.fromarray(img_np)
+                buffer = io.BytesIO()
+                pil_image.save(buffer, format="PNG")
+                image_base64 = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("utf-8")
+            except Exception:
+                # Silently fail on image conversion errors
+                pass
 
         return {"ui": {"image_base64": [image_base64]}, "result": (prompt,)}
 
