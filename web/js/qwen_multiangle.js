@@ -56,6 +56,11 @@ app.registerExtension({
 
                     if (data.type === 'VIEWER_READY') {
                         this._viewerReady = true;
+                        // Send pending image if any
+                        if (this._pendingImageSend) {
+                            this._pendingImageSend();
+                            delete this._pendingImageSend;
+                        }
                         // Send initial values
                         const hWidget = node.widgets.find(w => w.name === "horizontal_angle");
                         const vWidget = node.widgets.find(w => w.name === "vertical_angle");
@@ -164,19 +169,7 @@ app.registerExtension({
                         if (this._viewerReady) {
                             sendImage();
                         } else {
-                            const checkReady = setInterval(() => {
-                                if (this._viewerReady) {
-                                    clearInterval(checkReady);
-                                    sendImage();
-                                }
-                            }, 50);
-
-                            setTimeout(() => {
-                                clearInterval(checkReady);
-                                if (!this._viewerReady) {
-                                    sendImage();
-                                }
-                            }, 2000);
+                            this._pendingImageSend = sendImage;
                         }
                     }
                 };
@@ -189,6 +182,7 @@ app.registerExtension({
                     if (resizeTimeout) {
                         clearTimeout(resizeTimeout);
                     }
+                    delete this._pendingImageSend;
                     if (iframe._blobUrl) {
                         URL.revokeObjectURL(iframe._blobUrl);
                     }
